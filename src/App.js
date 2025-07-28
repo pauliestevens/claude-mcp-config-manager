@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Download, Upload, Plus, Trash2, Save, Eye, EyeOff, AlertCircle, CheckCircle, Copy } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Download, Upload, Plus, Trash2, Eye, EyeOff, AlertCircle, CheckCircle, Copy } from 'lucide-react';
 import './App.css';
 
 const ClaudeConfigManager = () => {
@@ -11,12 +11,7 @@ const ClaudeConfigManager = () => {
   const [successMessage, setSuccessMessage] = useState('');
   const [activeTab, setActiveTab] = useState('visual');
 
-  // Initialize with empty config
-  useEffect(() => {
-    validateConfig();
-  }, [config]);
-
-  const validateConfig = () => {
+  const validateConfig = useCallback(() => {
     const errors = [];
     
     Object.entries(config.mcpServers).forEach(([serverName, serverConfig]) => {
@@ -39,7 +34,12 @@ const ClaudeConfigManager = () => {
     
     setValidationErrors(errors);
     return errors.length === 0;
-  };
+  }, [config.mcpServers]);
+
+  // Initialize with empty config
+  useEffect(() => {
+    validateConfig();
+  }, [validateConfig]);
 
   const addMcpServer = () => {
     const newServerName = `new-server-${Object.keys(config.mcpServers).length + 1}`;

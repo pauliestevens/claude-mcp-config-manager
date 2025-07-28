@@ -1,6 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Download, Upload, Plus, Trash2, Eye, EyeOff, AlertCircle, CheckCircle, Copy } from 'lucide-react';
+import { Download, Upload, Plus, Trash2, Eye, EyeOff, AlertCircle, CheckCircle, Copy, Shield, Lock, AlertTriangle } from 'lucide-react';
 import './App.css';
+
+const SecurityNotice = () => (
+  <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+    <div className="flex items-center mb-2">
+      <Shield className="h-5 w-5 text-yellow-600 mr-2" />
+      <span className="font-medium text-yellow-800">Security Notice</span>
+    </div>
+    <ul className="text-sm text-yellow-700 space-y-1">
+      <li>• All data processing happens locally in your browser - nothing is sent to external servers</li>
+      <li>• Close browser developer tools when entering API keys to prevent accidental exposure</li>
+      <li>• Exported files contain plaintext secrets - store them securely and limit access</li>
+      <li>• Use environment-specific keys (avoid production keys for testing)</li>
+      <li>• Regularly rotate API keys per service security recommendations</li>
+    </ul>
+  </div>
+);
 
 const ClaudeConfigManager = () => {
   const [config, setConfig] = useState({
@@ -10,6 +26,45 @@ const ClaudeConfigManager = () => {
   const [validationErrors, setValidationErrors] = useState([]);
   const [successMessage, setSuccessMessage] = useState('');
   const [activeTab, setActiveTab] = useState('visual');
+  const [exportOptions, setExportOptions] = useState({
+    includeSecrets: true,
+    showWarning: false
+  });
+  const [devToolsWarning, setDevToolsWarning] = useState(false);
+  const [sessionTimeout, setSessionTimeout] = useState(null);
+
+  // Check for developer tools (basic detection)
+  useEffect(() => {
+    const checkDevTools = () => {
+      const threshold = 160;
+      if (window.outerHeight - window.innerHeight > threshold || 
+          window.outerWidth - window.innerWidth > threshold) {
+        setDevToolsWarning(true);
+      } else {
+        setDevToolsWarning(false);
+      }
+    };
+
+    window.addEventListener('resize', checkDevTools);
+    checkDevTools();
+
+    return () => window.removeEventListener('resize', checkDevTools);
+  }, []);
+
+  // Session timeout for sensitive data warning
+  useEffect(() => {
+    const hasSecrets = Object.values(config.mcpServers).some(server => 
+      Object.keys(server.env || {}).length > 0
+    );
+
+    if (hasSecrets && !sessionTimeout) {
+      const timeout = setTimeout(() => {
+        setSessionTimeout('Consider clearing sensitive data if you\'re finished configuring.');
+      }, 30 * 60 * 1000); // 30 minutes
+
+      return () => clearTimeout(timeout);
+    }
+  }, [config.mcpServers, sessionTimeout]);
 
   const validateConfig = useCallback(() => {
     const errors = [];
@@ -36,7 +91,6 @@ const ClaudeConfigManager = () => {
     return errors.length === 0;
   }, [config.mcpServers]);
 
-  // Initialize with empty config
   useEffect(() => {
     validateConfig();
   }, [validateConfig]);
@@ -125,13 +179,53 @@ const ClaudeConfigManager = () => {
     updateServer(serverName, 'env', currentEnv);
   };
 
+  const createExportConfig = () => {
+    if (!exportOptions.includeSecrets) {
+      // Create config with placeholder values for environment variables
+      const sanitizedConfig = {
+        mcpServers: {}
+      };
+      
+      Object.entries(config.mcpServers).forEach(([serverName, serverConfig]) => {
+        sanitizedConfig.mcpServers[serverName] = {
+          ...serverConfig,
+          env: {}
+        };
+        
+        // Add placeholder entries for env vars
+        Object.keys(serverConfig.env || {}).forEach(key => {
+          sanitizedConfig.mcpServers[serverName].env[key] = `[ENTER_${key.toUpperCase()}_HERE]`;
+        });
+      });
+      
+      return sanitizedConfig;
+    }
+    
+    return config;
+  };
+
   const exportConfig = () => {
     if (!validateConfig()) {
       alert('Please fix validation errors before exporting');
       return;
     }
-    
-    const configJson = JSON.stringify(config, null, 2);
+
+    // Check if config contains secrets
+    const hasSecrets = Object.values(config.mcpServers).some(server => 
+      Object.values(server.env || {}).some(value => value.trim() !== '')
+    );
+
+    if (hasSecrets && exportOptions.includeSecrets) {
+      setExportOptions(prev => ({ ...prev, showWarning: true }));
+      return;
+    }
+
+    performExport();
+  };
+
+  const performExport = () => {
+    const exportConfig = createExportConfig();
+    const configJson = JSON.stringify(exportConfig, null, 2);
     const blob = new Blob([configJson], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -142,8 +236,13 @@ const ClaudeConfigManager = () => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     
-    setSuccessMessage('Configuration exported successfully!');
-    setTimeout(() => setSuccessMessage(''), 3000);
+    const message = exportOptions.includeSecrets 
+      ? 'Configuration exported with API keys - store securely!'
+      : 'Configuration exported with placeholder values for API keys';
+      
+    setSuccessMessage(message);
+    setTimeout(() => setSuccessMessage(''), 5000);
+    setExportOptions(prev => ({ ...prev, showWarning: false }));
   };
 
   const importConfig = (event) => {
@@ -155,8 +254,20 @@ const ClaudeConfigManager = () => {
       try {
         const importedConfig = JSON.parse(e.target.result);
         setConfig(importedConfig);
-        setSuccessMessage('Configuration imported successfully!');
-        setTimeout(() => setSuccessMessage(''), 3000);
+        
+        // Check if imported config has placeholder values
+        const hasPlaceholders = Object.values(importedConfig.mcpServers).some(server =>
+          Object.values(server.env || {}).some(value => 
+            typeof value === 'string' && value.includes('[ENTER_') && value.includes('_HERE]')
+          )
+        );
+        
+        const message = hasPlaceholders 
+          ? 'Configuration imported - please enter your actual API keys in placeholder fields'
+          : 'Configuration imported successfully';
+          
+        setSuccessMessage(message);
+        setTimeout(() => setSuccessMessage(''), 5000);
       } catch (error) {
         alert('Invalid JSON file. Please check the format.');
       }
@@ -170,11 +281,43 @@ const ClaudeConfigManager = () => {
       return;
     }
     
-    const configJson = JSON.stringify(config, null, 2);
+    const exportConfig = createExportConfig();
+    const configJson = JSON.stringify(exportConfig, null, 2);
+    
     navigator.clipboard.writeText(configJson).then(() => {
-      setSuccessMessage('Configuration copied to clipboard!');
-      setTimeout(() => setSuccessMessage(''), 3000);
+      const message = exportOptions.includeSecrets 
+        ? 'Configuration copied to clipboard with API keys - paste securely!'
+        : 'Configuration copied to clipboard with placeholder values';
+        
+      setSuccessMessage(message);
+      
+      // Auto-clear clipboard after 2 minutes for security
+      if (exportOptions.includeSecrets) {
+        setTimeout(() => {
+          navigator.clipboard.writeText('').catch(() => {});
+        }, 120000);
+      }
+      
+      setTimeout(() => setSuccessMessage(''), 5000);
     });
+  };
+
+  const clearSensitiveData = () => {
+    const clearedConfig = {
+      mcpServers: {}
+    };
+    
+    Object.entries(config.mcpServers).forEach(([serverName, serverConfig]) => {
+      clearedConfig.mcpServers[serverName] = {
+        ...serverConfig,
+        env: {}
+      };
+    });
+    
+    setConfig(clearedConfig);
+    setSessionTimeout(null);
+    setSuccessMessage('Sensitive environment variables cleared for security');
+    setTimeout(() => setSuccessMessage(''), 3000);
   };
 
   const togglePasswordVisibility = (serverName, envKey) => {
@@ -231,6 +374,77 @@ const ClaudeConfigManager = () => {
         <p className="text-gray-600">Create and manage your Claude desktop configuration file with proper formatting and validation.</p>
       </div>
 
+      <SecurityNotice />
+
+      {/* Developer Tools Warning */}
+      {devToolsWarning && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+          <div className="flex items-center">
+            <AlertTriangle className="h-5 w-5 text-red-500 mr-2" />
+            <span className="text-red-700 font-medium">Security Warning: Browser developer tools may be open</span>
+          </div>
+          <p className="text-red-600 text-sm mt-1">Close developer tools before entering API keys to prevent accidental exposure.</p>
+        </div>
+      )}
+
+      {/* Session Timeout Warning */}
+      {sessionTimeout && (
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              <AlertCircle className="h-5 w-5 text-blue-500 mr-2" />
+              <span className="text-blue-700">{sessionTimeout}</span>
+            </div>
+            <button
+              onClick={clearSensitiveData}
+              className="text-sm text-blue-600 hover:text-blue-700 underline"
+            >
+              Clear Sensitive Data
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Export Security Warning Modal */}
+      {exportOptions.showWarning && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg max-w-md mx-4">
+            <div className="flex items-center mb-4">
+              <Lock className="h-6 w-6 text-yellow-500 mr-2" />
+              <h3 className="text-lg font-medium">Export Security Warning</h3>
+            </div>
+            <p className="text-gray-700 mb-4">
+              Your configuration contains API keys and sensitive data. The exported file will include these secrets in plaintext.
+            </p>
+            <div className="mb-4">
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={!exportOptions.includeSecrets}
+                  onChange={(e) => setExportOptions(prev => ({ ...prev, includeSecrets: !e.target.checked }))}
+                  className="mr-2"
+                />
+                <span className="text-sm">Export with placeholder values instead of actual API keys</span>
+              </label>
+            </div>
+            <div className="flex space-x-3">
+              <button
+                onClick={performExport}
+                className="flex-1 bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700"
+              >
+                {exportOptions.includeSecrets ? 'Export with Secrets' : 'Export with Placeholders'}
+              </button>
+              <button
+                onClick={() => setExportOptions(prev => ({ ...prev, showWarning: false }))}
+                className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Status Messages */}
       {successMessage && (
         <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center">
@@ -284,6 +498,30 @@ const ClaudeConfigManager = () => {
           <Copy className="h-4 w-4 mr-2" />
           Copy to Clipboard
         </button>
+
+        {Object.values(config.mcpServers).some(server => Object.keys(server.env || {}).length > 0) && (
+          <button
+            onClick={clearSensitiveData}
+            className="flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Clear Secrets
+          </button>
+        )}
+      </div>
+
+      {/* Export Options */}
+      <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+        <h3 className="text-lg font-medium text-gray-900 mb-3">Export Options:</h3>
+        <label className="flex items-center">
+          <input
+            type="checkbox"
+            checked={exportOptions.includeSecrets}
+            onChange={(e) => setExportOptions(prev => ({ ...prev, includeSecrets: e.target.checked }))}
+            className="mr-2"
+          />
+          <span className="text-sm">Include actual API keys in exports (uncheck for placeholder values)</span>
+        </label>
       </div>
 
       {/* Quick Add Common Configs */}
@@ -412,7 +650,7 @@ const ClaudeConfigManager = () => {
                       type="text"
                       value={key}
                       onChange={(e) => updateEnvVar(serverName, key, e.target.value, value)}
-                      placeholder="Variable name"
+                      placeholder="Variable name (e.g., API_KEY)"
                       className="w-1/3 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 mr-2"
                     />
                     <div className="flex-1 relative mr-2">
@@ -420,7 +658,7 @@ const ClaudeConfigManager = () => {
                         type={showPassword[`${serverName}-${key}`] ? "text" : "password"}
                         value={value}
                         onChange={(e) => updateEnvVar(serverName, key, key, e.target.value)}
-                        placeholder="Variable value"
+                        placeholder={value.includes('[ENTER_') ? value : "Enter secret value"}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 pr-10"
                       />
                       <button
@@ -456,7 +694,7 @@ const ClaudeConfigManager = () => {
       ) : (
         <div className="bg-gray-900 text-gray-100 p-4 rounded-lg">
           <pre className="text-sm overflow-x-auto">
-            {JSON.stringify(config, null, 2)}
+            {JSON.stringify(exportOptions.includeSecrets ? config : createExportConfig(), null, 2)}
           </pre>
         </div>
       )}
